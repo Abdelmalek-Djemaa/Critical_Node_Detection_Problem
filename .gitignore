@@ -1,0 +1,11 @@
+# Virtual environment
+venv/
+
+# Python bytecode
+*.pyc
+
+# IDE settings
+.vscode/
+
+# Mac system files
+.DS_Store
