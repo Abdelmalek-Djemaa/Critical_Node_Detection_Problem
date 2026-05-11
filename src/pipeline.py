@@ -1,53 +1,45 @@
 import os
 import torch
 import pickle
-from torch_geometric.data import Batch
+from tqdm import tqdm
 from utils import nx_to_pyg
 from models import GNCR
-from train import train_model
-from metrics import top_n_accuracy
+from metrics import pairwise_ranking_loss, top_n_accuracy
 
-DATA_DIR = "train_data"
+def run_pipeline(prefix, model_path, epochs=50, model_kwargs=None):
+    if model_kwargs is None: model_kwargs = {}
+    
+    # Force CPU for training stability on Mac/Complex GNNs
+    device = torch.device("cpu")
+    
+    # Load Data
+    data_list = []
+    if os.path.exists("train_data"):
+        for f in sorted(os.listdir("train_data")):
+            if f.startswith(prefix) and f.endswith(".pkl"):
+                with open(os.path.join("train_data", f), "rb") as file:
+                    entry = pickle.load(file)
+                    d = nx_to_pyg(entry["graph"])
+                    d.y = torch.tensor(entry["scores"], dtype=torch.float32)
+                    data_list.append(d)
 
-def load_saved_graphs(prefix):
-    data_list, y_list = [], []
+    if not data_list: return
+    
+    model = GNCR(**model_kwargs).to(device)
+    optimizer = torch.optim.Adam(model.parameters(), lr=0.001)
+    
+    pbar = tqdm(range(epochs), desc=f"Training {prefix}")
+    for epoch in pbar:
+        model.train()
+        total_loss = 0
+        for data in data_list:
+            optimizer.zero_grad()
+            data = data.to(device)
+            pred = model(data).view(-1)
+            loss = pairwise_ranking_loss(pred, data.y.to(device))
+            loss.backward()
+            optimizer.step()
+            total_loss += loss.item()
+        pbar.set_postfix(loss=total_loss/len(data_list))
 
-    for filename in sorted(os.listdir(DATA_DIR)):
-        if filename.startswith(prefix) and filename.endswith(".pkl"):
-            with open(os.path.join(DATA_DIR, filename), "rb") as f:
-                entry = pickle.load(f)
-                G, scores = entry["graph"], entry["scores"]
-                y = torch.tensor(scores, dtype=torch.float)
-                data = nx_to_pyg(G,y)
-                data_list.append(data)
-                y_list.append(y)
-
-    batch = Batch.from_data_list(data_list)
-    y_all = torch.cat(y_list, dim=0)
-    return batch, y_all
-
-hidden_dim = 32
-
-def run_pipeline(prefix, model_path, epochs=1000):
-    data, y_true = load_saved_graphs(prefix)
-    model = GNCR(hidden_dim)
-    train_model(model, data, y_true, epochs)
     torch.save(model.state_dict(), model_path)
-    print(f"Model saved to {model_path}")
-
-    model.eval()
-    y_pred = model(data).detach()
-    acc = top_n_accuracy(y_pred, y_true, N=5)
-    print(f"Top-5% Accuracy: {acc * 100:.2f}%")
-
-def main():
-    os.makedirs("models", exist_ok=True)
-
-    print("Training on saved Power Law graphs...")
-    run_pipeline("pl", "models/model_SAGE_pl.pth")
-
-    print("Training on saved Power Law Cluster graphs...")
-    run_pipeline("plc", "models/model_SAGE_plc.pth")
-
-if __name__ == "__main__":
-    main()

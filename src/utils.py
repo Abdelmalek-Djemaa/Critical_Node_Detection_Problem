@@ -75,10 +75,15 @@ def nx_to_pyg(nx_graph, features=None):
 
 def load_trained_model(model, model_path):
     try:
-        model.load_state_dict(torch.load(model_path, map_location=torch.device('cpu')))
+        state_dict = torch.load(model_path, map_location=torch.device('cpu'))
+        model.load_state_dict(state_dict)
         print(f"Loaded model from {model_path}")
     except FileNotFoundError:
         print(f"No pretrained model found at {model_path}. Starting fresh.")
+    except RuntimeError as e:
+        print(f"Warning: Could not load model from {model_path}.")
+        print(f"Reason: {str(e)[:100]}...")
+        print(f"Starting with fresh model.")
     return model
 
 
